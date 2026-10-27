@@ -8,8 +8,6 @@
 #include <utility>
 #include <vector>
 
-static_assert(BlockSize > 0, "BlockSize must be greater than zero.");
-
 /**
  * @brief High-performance fixed-size Object Memory Pool.
  * Eliminates heap fragmentation and dynamic allocation overhead by pre-allocating
@@ -18,6 +16,8 @@ static_assert(BlockSize > 0, "BlockSize must be greater than zero.");
 template <typename T, std::size_t BlockSize = 1024>
 class MemoryPool {
 private:
+    static_assert(BlockSize > 0, "BlockSize must be greater than zero.");
+
     union Slot {
         T element;
         Slot* next;
@@ -33,8 +33,11 @@ private:
     void allocateBlock() {
         auto block = std::make_unique<Slot[]>(BlockSize);
 
-        for (std::size_t i = 0; i < BlockSize; ++i) {
-            block[i].next = (i + 1 < BlockSize) ? &block[i + 1] : freeSlots_;
+        for (std::size_t i = 0; i + 1 < BlockSize; ++i) {
+            block[i].next = &block[i + 1];
+        }
+        if (BlockSize > 0) {
+            block[BlockSize - 1].next = freeSlots_;
         }
 
         freeSlots_ = &block[0];
@@ -42,11 +45,12 @@ private:
     }
 
     void release() noexcept {
-        for (auto* ptr : allocatedPointers_) {
+        for (T* ptr : allocatedPointers_) {
             if (ptr != nullptr) {
                 ptr->~T();
             }
         }
+
         allocatedPointers_.clear();
         freeSlots_ = nullptr;
         blocks_.clear();
@@ -59,11 +63,9 @@ public:
         release();
     }
 
-    // Disable copying for safety
     MemoryPool(const MemoryPool&) = delete;
     MemoryPool& operator=(const MemoryPool&) = delete;
 
-    // Allow move semantics
     MemoryPool(MemoryPool&& other) noexcept
         : blocks_(std::move(other.blocks_)),
           freeSlots_(other.freeSlots_),
@@ -83,7 +85,6 @@ public:
             other.freeSlots_ = nullptr;
             other.allocatedPointers_.clear();
         }
-
         return *this;
     }
 
