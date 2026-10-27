@@ -1,11 +1,14 @@
 #ifndef MEMORY_POOL_HPP
 #define MEMORY_POOL_HPP
 
-#include <cstddef>
-#include <vector>
-#include <utility>
 #include <cassert>
-#include <new>
+#include <cstddef>
+#include <memory>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+static_assert(BlockSize > 0, "BlockSize must be greater than zero.");
 
 /**
  * @brief High-performance fixed-size Object Memory Pool.
@@ -19,75 +22,103 @@ private:
         T element;
         Slot* next;
 
-        Slot() {}
-        ~Slot() {}
+        Slot() : next(nullptr) {}
+        ~Slot() = default;
     };
 
-    Slot* currentBlock_ = nullptr;
-    Slot* currentSlot_ = nullptr;
+    std::vector<std::unique_ptr<Slot[]>> blocks_;
     Slot* freeSlots_ = nullptr;
-    Slot* lastSlot_ = nullptr;
+    std::unordered_set<T*> allocatedPointers_;
 
     void allocateBlock() {
-        // Allocate contiguous memory block
-        Slot* newBlock = reinterpret_cast<Slot*>(operator new(BlockSize * sizeof(Slot)));
-        newBlock[0].next = currentBlock_;
-        currentBlock_ = newBlock;
+        auto block = std::make_unique<Slot[]>(BlockSize);
 
-        // Set pointer boundaries for memory block
-        currentSlot_ = newBlock + 1;
-        lastSlot_ = newBlock + BlockSize;
+        for (std::size_t i = 0; i < BlockSize; ++i) {
+            block[i].next = (i + 1 < BlockSize) ? &block[i + 1] : freeSlots_;
+        }
+
+        freeSlots_ = &block[0];
+        blocks_.push_back(std::move(block));
+    }
+
+    void release() noexcept {
+        for (auto* ptr : allocatedPointers_) {
+            if (ptr != nullptr) {
+                ptr->~T();
+            }
+        }
+        allocatedPointers_.clear();
+        freeSlots_ = nullptr;
+        blocks_.clear();
     }
 
 public:
     MemoryPool() noexcept = default;
+
     ~MemoryPool() noexcept {
-        Slot* curr = currentBlock_;
-        while (curr != nullptr) {
-            Slot* next = curr[0].next;
-            operator delete(reinterpret_cast<void*>(curr));
-            curr = next;
-        }
+        release();
     }
 
     // Disable copying for safety
     MemoryPool(const MemoryPool&) = delete;
     MemoryPool& operator=(const MemoryPool&) = delete;
 
-    // Allow Move Semantics
-    MemoryPool(MemoryPool&& other) noexcept {
-        currentBlock_ = other.currentBlock_;
-        currentSlot_ = other.currentSlot_;
-        freeSlots_ = other.freeSlots_;
-        lastSlot_ = other.lastSlot_;
-        other.currentBlock_ = nullptr;
+    // Allow move semantics
+    MemoryPool(MemoryPool&& other) noexcept
+        : blocks_(std::move(other.blocks_)),
+          freeSlots_(other.freeSlots_),
+          allocatedPointers_(std::move(other.allocatedPointers_)) {
+        other.freeSlots_ = nullptr;
+        other.allocatedPointers_.clear();
+    }
+
+    MemoryPool& operator=(MemoryPool&& other) noexcept {
+        if (this != &other) {
+            release();
+
+            blocks_ = std::move(other.blocks_);
+            freeSlots_ = other.freeSlots_;
+            allocatedPointers_ = std::move(other.allocatedPointers_);
+
+            other.freeSlots_ = nullptr;
+            other.allocatedPointers_.clear();
+        }
+
+        return *this;
     }
 
     template <typename... Args>
     T* allocate(Args&&... args) {
-        if (freeSlots_ != nullptr) {
-            T* result = reinterpret_cast<T*>(freeSlots_);
-            freeSlots_ = freeSlots_->next;
-            new (result) T(std::forward<Args>(args)...); // Placement NEW
-            return result;
-        }
-
-        if (currentSlot_ >= lastSlot_) {
+        if (freeSlots_ == nullptr) {
             allocateBlock();
         }
 
-        T* result = reinterpret_cast<T*>(currentSlot_++);
-        new (result) T(std::forward<Args>(args)...); // Placement NEW
+        Slot* slot = freeSlots_;
+        freeSlots_ = slot->next;
+
+        T* result = reinterpret_cast<T*>(slot);
+        new (result) T(std::forward<Args>(args)...);
+        allocatedPointers_.insert(result);
         return result;
     }
 
     void deallocate(T* ptr) noexcept {
-        if (ptr != nullptr) {
-            ptr->~T(); // Explicit Destructor call
-            Slot* slot = reinterpret_cast<Slot*>(ptr);
-            slot->next = freeSlots_;
-            freeSlots_ = slot;
+        if (ptr == nullptr) {
+            return;
         }
+
+        const auto it = allocatedPointers_.find(ptr);
+        assert(it != allocatedPointers_.end() && "Deallocating pointer not owned by this MemoryPool.");
+        if (it == allocatedPointers_.end()) {
+            return;
+        }
+
+        ptr->~T();
+        allocatedPointers_.erase(it);
+
+        Slot* slot = reinterpret_cast<Slot*>(ptr);
+        slot->next = freeSlots_;
+        freeSlots_ = slot;
     }
 };
 
