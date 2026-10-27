@@ -12,85 +12,82 @@
 using EntityID = std::uint32_t;
 constexpr EntityID MAX_ENTITIES = 100000;
 
-// Abstract Component Interface
 struct IComponentArray {
     virtual ~IComponentArray() = default;
     virtual void entityDestroyed(EntityID entity) = 0;
 };
 
-// Packed Component Array for Sequential CPU Cache Access
 template <typename T>
 class ComponentArray : public IComponentArray {
 private:
-    std::vector<T> componentArray_;
-    std::unordered_map<EntityID, std::size_t> entityToIndexMap_;
-    std::unordered_map<std::size_t, EntityID> indexToEntityMap_;
+    std::vector<T> data_;
+    std::unordered_map<EntityID, std::size_t> entityToIndex_;
+    std::unordered_map<std::size_t, EntityID> indexToEntity_;
     std::size_t size_ = 0;
 
 public:
     bool hasData(EntityID entity) const {
-        return entityToIndexMap_.find(entity) != entityToIndexMap_.end();
+        return entityToIndex_.find(entity) != entityToIndex_.end();
     }
 
-    void insertData(EntityID entity, T component) {
-        auto it = entityToIndexMap_.find(entity);
-        if (it != entityToIndexMap_.end()) {
-            componentArray_[it->second] = component;
+    void insertData(EntityID entity, T value) {
+        auto it = entityToIndex_.find(entity);
+        if (it != entityToIndex_.end()) {
+            data_[it->second] = value;
             return;
         }
 
         const std::size_t newIndex = size_;
-        entityToIndexMap_[entity] = newIndex;
-        indexToEntityMap_[newIndex] = entity;
+        entityToIndex_[entity] = newIndex;
+        indexToEntity_[newIndex] = entity;
 
-        if (newIndex >= componentArray_.size()) {
-            componentArray_.resize(newIndex + 1);
+        if (newIndex >= data_.size()) {
+            data_.resize(newIndex + 1);
         }
 
-        componentArray_[newIndex] = component;
+        data_[newIndex] = value;
         ++size_;
     }
 
     void removeData(EntityID entity) {
-        auto it = entityToIndexMap_.find(entity);
-        if (it == entityToIndexMap_.end() || size_ == 0) {
+        auto it = entityToIndex_.find(entity);
+        if (it == entityToIndex_.end()) {
             return;
         }
 
-        const std::size_t indexOfRemovedEntity = it->second;
-        const std::size_t indexOfLastElement = size_ - 1;
+        const std::size_t indexToRemove = it->second;
+        const std::size_t lastIndex = size_ - 1;
 
-        if (indexOfRemovedEntity != indexOfLastElement) {
-            componentArray_[indexOfRemovedEntity] = componentArray_[indexOfLastElement];
-
-            const EntityID entityOfLastElement = indexToEntityMap_[indexOfLastElement];
-            entityToIndexMap_[entityOfLastElement] = indexOfRemovedEntity;
-            indexToEntityMap_[indexOfRemovedEntity] = entityOfLastElement;
+        if (indexToRemove != lastIndex) {
+            data_[indexToRemove] = data_[lastIndex];
+            const EntityID movedEntity = indexToEntity_[lastIndex];
+            entityToIndex_[movedEntity] = indexToRemove;
+            indexToEntity_[indexToRemove] = movedEntity;
         }
 
-        entityToIndexMap_.erase(entity);
-        indexToEntityMap_.erase(indexOfLastElement);
+        entityToIndex_.erase(entity);
+        indexToEntity_.erase(lastIndex);
         --size_;
 
-        if (componentArray_.size() > size_) {
-            componentArray_.resize(size_);
+        if (data_.size() > size_) {
+            data_.resize(size_);
         }
     }
 
     T& getData(EntityID entity) {
-        const auto it = entityToIndexMap_.find(entity);
-        if (it == entityToIndexMap_.end()) {
+        const auto it = entityToIndex_.find(entity);
+        if (it == entityToIndex_.end()) {
             throw std::out_of_range("Entity does not have this component.");
         }
-        return componentArray_[it->second];
+        return data_[it->second];
     }
 
     const T& getData(EntityID entity) const {
-        const auto it = entityToIndexMap_.find(entity);
-        if (it == entityToIndexMap_.end()) {
+        const auto it = entityToIndex_.find(entity);
+        if (it == entityToIndex_.end()) {
             throw std::out_of_range("Entity does not have this component.");
         }
-        return componentArray_[it->second];
+        return data_[it->second];
     }
 
     void entityDestroyed(EntityID entity) override {
@@ -98,12 +95,8 @@ public:
             removeData(entity);
         }
     }
-
-    std::vector<T>& getRawArray() { return componentArray_; }
-    std::size_t getSize() const { return size_; }
 };
 
-// Coordinator for Entities and Components
 class Registry {
 private:
     EntityID livingEntityCount_ = 0;
@@ -158,9 +151,7 @@ public:
     template <typename T>
     void registerComponent() {
         const std::type_index typeName = std::type_index(typeid(T));
-        if (componentArrays_.find(typeName) == componentArrays_.end()) {
-            componentArrays_[typeName] = std::make_shared<ComponentArray<T>>();
-        }
+        componentArrays_.try_emplace(typeName, std::make_shared<ComponentArray<T>>());
     }
 
     template <typename T>
@@ -169,7 +160,7 @@ public:
             throw std::out_of_range("Attempted to add component to an invalid or destroyed entity.");
         }
 
-        getComponentArray<T>()->insertData(entity, component);
+        getComponentArray<T>()->insertData(entity, std::move(component));
     }
 
     template <typename T>

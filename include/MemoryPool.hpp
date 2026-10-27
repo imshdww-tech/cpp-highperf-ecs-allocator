@@ -36,6 +36,7 @@ private:
         for (std::size_t i = 0; i + 1 < BlockSize; ++i) {
             block[i].next = &block[i + 1];
         }
+
         if (BlockSize > 0) {
             block[BlockSize - 1].next = freeSlots_;
         }
@@ -85,6 +86,7 @@ public:
             other.freeSlots_ = nullptr;
             other.allocatedPointers_.clear();
         }
+
         return *this;
     }
 
