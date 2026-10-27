@@ -2,10 +2,10 @@
 #define ECS_HPP
 
 #include <cstdint>
-#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <typeindex>
+#include <typeinfo>
 #include <unordered_map>
 #include <vector>
 
@@ -53,7 +53,7 @@ public:
 
     void removeData(EntityID entity) {
         auto it = entityToIndexMap_.find(entity);
-        if (it == entityToIndexMap_.end()) {
+        if (it == entityToIndexMap_.end() || size_ == 0) {
             return;
         }
 
@@ -70,10 +70,7 @@ public:
 
         entityToIndexMap_.erase(entity);
         indexToEntityMap_.erase(indexOfLastElement);
-
-        if (size_ > 0) {
-            --size_;
-        }
+        --size_;
 
         if (componentArray_.size() > size_) {
             componentArray_.resize(size_);
