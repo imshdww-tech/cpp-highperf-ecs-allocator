@@ -33,7 +33,7 @@ public:
     void insertData(EntityID entity, T value) {
         auto it = entityToIndex_.find(entity);
         if (it != entityToIndex_.end()) {
-            data_[it->second] = value;
+            data_[it->second] = std::move(value);
             return;
         }
 
@@ -45,7 +45,7 @@ public:
             data_.resize(newIndex + 1);
         }
 
-        data_[newIndex] = value;
+        data_[newIndex] = std::move(value);
         ++size_;
     }
 
@@ -59,7 +59,7 @@ public:
         const std::size_t lastIndex = size_ - 1;
 
         if (indexToRemove != lastIndex) {
-            data_[indexToRemove] = data_[lastIndex];
+            data_[indexToRemove] = std::move(data_[lastIndex]);
             const EntityID movedEntity = indexToEntity_[lastIndex];
             entityToIndex_[movedEntity] = indexToRemove;
             indexToEntity_[indexToRemove] = movedEntity;
@@ -139,7 +139,7 @@ public:
             return;
         }
 
-        for (auto const& pair : componentArrays_) {
+        for (const auto& pair : componentArrays_) {
             pair.second->entityDestroyed(entity);
         }
 

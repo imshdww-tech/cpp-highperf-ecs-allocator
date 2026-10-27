@@ -9,18 +9,22 @@
 #include <vector>
 
 /**
- * @brief High-performance fixed-size Object Memory Pool.
- * Eliminates heap fragmentation and dynamic allocation overhead by pre-allocating
- * contiguous memory chunks.
+ * @brief Fixed-size Object Memory Pool.
+ *
+ * This pool pre-allocates blocks of memory and reuses them for objects of a
+ * single type. It avoids heap fragmentation and keeps allocation/deallocation
+ * fast for short-lived, repeated object lifecycles.
  */
 template <typename T, std::size_t BlockSize = 1024>
 class MemoryPool {
 private:
     static_assert(BlockSize > 0, "BlockSize must be greater than zero.");
 
-    union Slot {
-        T element;
-        Slot* next;
+    struct Slot {
+        union {
+            T element;
+            Slot* next;
+        };
 
         Slot() : next(nullptr) {}
         ~Slot() = default;
@@ -36,59 +40,35 @@ private:
         for (std::size_t i = 0; i + 1 < BlockSize; ++i) {
             block[i].next = &block[i + 1];
         }
-
-        if (BlockSize > 0) {
-            block[BlockSize - 1].next = freeSlots_;
-        }
+        block[BlockSize - 1].next = freeSlots_;
 
         freeSlots_ = &block[0];
         blocks_.push_back(std::move(block));
     }
 
-    void release() noexcept {
+    void destroyAllLiveObjects() noexcept {
         for (T* ptr : allocatedPointers_) {
             if (ptr != nullptr) {
                 ptr->~T();
             }
         }
-
         allocatedPointers_.clear();
-        freeSlots_ = nullptr;
-        blocks_.clear();
     }
 
 public:
     MemoryPool() noexcept = default;
 
     ~MemoryPool() noexcept {
-        release();
+        destroyAllLiveObjects();
+        freeSlots_ = nullptr;
+        blocks_.clear();
     }
 
     MemoryPool(const MemoryPool&) = delete;
     MemoryPool& operator=(const MemoryPool&) = delete;
 
-    MemoryPool(MemoryPool&& other) noexcept
-        : blocks_(std::move(other.blocks_)),
-          freeSlots_(other.freeSlots_),
-          allocatedPointers_(std::move(other.allocatedPointers_)) {
-        other.freeSlots_ = nullptr;
-        other.allocatedPointers_.clear();
-    }
-
-    MemoryPool& operator=(MemoryPool&& other) noexcept {
-        if (this != &other) {
-            release();
-
-            blocks_ = std::move(other.blocks_);
-            freeSlots_ = other.freeSlots_;
-            allocatedPointers_ = std::move(other.allocatedPointers_);
-
-            other.freeSlots_ = nullptr;
-            other.allocatedPointers_.clear();
-        }
-
-        return *this;
-    }
+    MemoryPool(MemoryPool&& other) noexcept = default;
+    MemoryPool& operator=(MemoryPool&& other) noexcept = default;
 
     template <typename... Args>
     T* allocate(Args&&... args) {
@@ -99,10 +79,10 @@ public:
         Slot* slot = freeSlots_;
         freeSlots_ = slot->next;
 
-        T* result = reinterpret_cast<T*>(slot);
-        new (result) T(std::forward<Args>(args)...);
-        allocatedPointers_.insert(result);
-        return result;
+        T* ptr = std::launder(reinterpret_cast<T*>(slot));
+        new (ptr) T(std::forward<Args>(args)...);
+        allocatedPointers_.insert(ptr);
+        return ptr;
     }
 
     void deallocate(T* ptr) noexcept {
@@ -111,8 +91,8 @@ public:
         }
 
         const auto it = allocatedPointers_.find(ptr);
-        assert(it != allocatedPointers_.end() && "Deallocating pointer not owned by this MemoryPool.");
         if (it == allocatedPointers_.end()) {
+            assert(false && "Pointer not owned by this memory pool.");
             return;
         }
 
