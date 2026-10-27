@@ -1,0 +1,9 @@
+# Visual Studio & IDE build artifacts
+.vs/
+bin/
+build/
+out/
+*.user
+*.suo
+*.obj
+*.exe
